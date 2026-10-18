@@ -47,6 +47,46 @@ Verify the role assignment:
 az role assignment list --assignee <YOUR_APP_CLIENT_ID>
 ```
 
+---
+
+Or use the a powershell script for the creation and role assignment all in one:
+```powershell
+# App name
+$appName = "MyAppRegistration"
+
+# Create App Registration
+$app = New-AzADApplication -DisplayName $appName
+
+# Create Service Principal
+$sp = New-AzADServicePrincipal -ApplicationId $app.AppId
+
+# Create Client Secret (valid for 2 years)
+$secret = New-AzADAppCredential `
+    -ApplicationId $app.AppId `
+    -StartDate (Get-Date) `
+    -EndDate (Get-Date).AddYears(2)
+
+# Give Azure AD a few seconds to replicate the Service Principal
+Start-Sleep -Seconds 20
+
+# Assign Reader role on current subscription
+$subscriptionId = (Get-AzContext).Subscription.Id
+
+New-AzRoleAssignment `
+    -ApplicationId $app.AppId `
+    -RoleDefinitionName "Reader" `
+    -Scope "/subscriptions/$subscriptionId"
+
+# Output
+Write-Host ""
+Write-Host "=== App Registration Created ==="
+Write-Host "Client ID     : $($app.AppId)"
+Write-Host "Tenant ID     : $((Get-AzContext).Tenant.Id)"
+Write-Host "Client Secret : $($secret.SecretText)"
+Write-Host "Subscription  : $subscriptionId"
+Write-Host "Role          : Reader"
+```
+
 ### 3. Configure Environment Variables
 
 Create a `.env` file in the project root with your Azure credentials:
