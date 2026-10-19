@@ -12,7 +12,8 @@ This project provides tools to fetch and explore Azure Virtual Machine SKUs acro
 
 ## Prerequisites
 
-- **Python 3.8+** required
+- **uv** installed ([installation instructions](https://docs.astral.sh/uv/getting-started/installation/))
+- **Python 3.13+** required; the project pins Python 3.13 in `.python-version`, and uv can install it automatically
 - **Azure Subscription** with appropriate permissions
 - **Azure App Registration** (Service Principal) with Reader role
 
@@ -105,21 +106,25 @@ AZURE_SUBSCRIPTION_ID=<YOUR_SUBSCRIPTION_ID>
 
 **⚠️ Important:** Never commit the `.env` file to version control. It's already included in `.gitignore`.
 
-### 4. Create Virtual Environment and Install Dependencies
+### 4. Set Up the Python Environment with uv
 
-**Windows:**
-```bash
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+Install uv if it is not already available. On Windows:
+
+```powershell
+winget install --id astral-sh.uv --exact
 ```
 
-**Linux/macOS:**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+Open a new terminal after installation, then run the following from the project root on any platform:
+
+```console
+uv sync --locked
 ```
+
+This installs the pinned Python version if needed, creates `.venv`, and installs the exact dependencies from `uv.lock`. No manual virtual environment creation or activation is required: use `uv run` for project commands.
+
+Dependencies are declared in `pyproject.toml`; `uv.lock` records their resolved versions. Keep both files in version control, but do not commit `.venv`.
+
+**Package index:** `pyproject.toml` configures the Microsoft CFS package feed as the default index. Dependency installation requires access to that feed.
 
 ## Usage
 
@@ -128,7 +133,7 @@ pip install -r requirements.txt
 Run the data collection script to fetch all VM SKUs:
 
 ```bash
-python list_vm_skus_all_regions.py
+uv run --locked python fetch_vm_skus_all_regions.py
 ```
 
 **Example Output:**
@@ -150,12 +155,36 @@ Tip: filter by Region or SkuName in your spreadsheet/BI tool.
 
 Output files are saved to the `data/` directory.
 
+The summary also reports the total number of distinct `resourceType` values returned by the API before the VM-only filter is applied. Exported rows remain limited to `virtualMachines`.
+
+To list all distinct resource types instead of collecting VM data:
+
+```console
+uv run --locked python fetch_vm_skus_all_regions.py --listResourceTypes
+```
+
+This prints the resource types in alphabetical order and their total count, then exits without collecting VM records or creating or modifying data files. It still requires Azure credentials and fetches all SKU pages to capture every resource type.
+
+To list all regions/locations and their reported availability zones across all Compute SKUs:
+
+```console
+uv run --locked python fetch_vm_skus_all_regions.py --listRegions
+```
+
+Azure SKU location identifiers (for example, `eastus`) represent regions here. This option combines locations from `locations` and `locationInfo` and lists the union of reported zones for each location, sorted alphabetically, followed by the total location count. Locations without zone information are shown as `zones not reported`; this does not prove that the region has no availability zones. The list reflects the Compute SKUs returned for your subscription, not the complete Azure regions catalog, and does not guarantee availability for an individual SKU.
+
+Both listing options announce what is being fetched and warn that it may take some time before contacting Azure. Neither collects VM records or writes data files. They can also be combined to fetch both lists in one pass:
+
+```console
+uv run --locked python fetch_vm_skus_all_regions.py --listResourceTypes --listRegions
+```
+
 ### 2. Launch Streamlit Dashboard
 
 Start the interactive dashboard:
 
 ```bash
-streamlit run streamlit_app.py
+uv run --locked streamlit run streamlit_app.py
 ```
 
 The dashboard provides:
@@ -165,9 +194,29 @@ The dashboard provides:
 - Detailed statistics for vCPUs, memory, and disk counts
 - Downloadable filtered results
 
+## Managing Dependencies
+
+Use uv to update project dependencies rather than installing packages directly with pip:
+
+```console
+uv add <package-name>
+uv remove <package-name>
+```
+
+These commands update `pyproject.toml`, `uv.lock`, and the local environment. Commit both dependency files when they change. After pulling changes, run `uv sync --locked` to synchronize your environment.
+
+To intentionally upgrade all locked dependencies within the constraints in `pyproject.toml`:
+
+```console
+uv lock --upgrade
+uv sync --locked
+```
+
+`requirements.txt` is retained as a legacy dependency list; the uv workflow uses `pyproject.toml` and `uv.lock` instead.
+
 ## Main Scripts
 
-### list_vm_skus_all_regions.py
+### fetch_vm_skus_all_regions.py
 
 Fetches Azure VM SKU data using the Azure REST API and exports to CSV and Parquet formats.
 
@@ -192,12 +241,16 @@ Interactive web dashboard for exploring Azure VM SKU data.
 
 ```
 .
-├── list_vm_skus_all_regions.py   # Data collection script
+├── fetch_vm_skus_all_regions.py  # Data collection script
 ├── streamlit_app.py               # Interactive dashboard
-├── requirements.txt               # Python dependencies
+├── pyproject.toml                 # Project metadata, dependencies, and uv index
+├── uv.lock                        # Locked dependency versions (commit this)
+├── .python-version                # Preferred Python version for uv
+├── .venv/                         # uv-managed environment (DO NOT COMMIT)
+├── requirements.txt               # Legacy dependency list (not used by uv)
 ├── .env                           # Azure credentials (DO NOT COMMIT)
 ├── .gitignore                     # Git ignore rules
-├── readme.md                      # This file
+├── Readme.md                      # This file
 └── data/                          # Output directory (created automatically)
     ├── vm_skus_all_regions.csv
     └── vm_skus_all_regions.parquet
@@ -216,9 +269,14 @@ Interactive web dashboard for exploring Azure VM SKU data.
 - Check API version compatibility (currently using 2025-04-01)
 
 **Streamlit errors:**
-- Ensure you've run `list_vm_skus_all_regions.py` first to generate data files
+- Ensure you've run `fetch_vm_skus_all_regions.py` first to generate data files
 - Verify the `data/` directory exists with the parquet file
-- Check that all required packages are installed
+- Run `uv sync --locked` to ensure all required packages are installed, then launch with `uv run --locked streamlit run streamlit_app.py`
+
+**uv setup errors:**
+- If `uv` is not recognized, reopen your terminal after installation and verify `uv --version` works
+- If the lockfile is missing or out of date after an intentional dependency change, run `uv lock`, then `uv sync --locked`, and commit the updated dependency files
+- If package downloads fail, check network access and any required authentication for the configured Microsoft CFS package feed
 
 ## Future Ideas
 
@@ -232,4 +290,3 @@ Interactive web dashboard for exploring Azure VM SKU data.
 ## License
 
 This project is provided as-is for educational and exploration purposes.
-

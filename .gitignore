@@ -79,6 +79,7 @@ cython_debug/
 
 # Environments
 .env
+!.env.example
 .env.*
 .venv/
 env/

@@ -1,4 +1,5 @@
 
+import argparse
 import csv
 import os
 import sys
@@ -8,6 +9,21 @@ import msal
 import pandas as pd
 from dotenv import load_dotenv
 from urllib.parse import urlencode
+
+parser = argparse.ArgumentParser(
+    description="Fetch Azure VM SKUs or list available resource types, regions, and zones."
+)
+parser.add_argument(
+    "--listResourceTypes",
+    action="store_true",
+    help="List distinct resource types and exit without collecting VM records or writing data files.",
+)
+parser.add_argument(
+    "--listRegions",
+    action="store_true",
+    help="List all Compute SKU regions/locations and their reported zones without writing data files.",
+)
+args = parser.parse_args()
 
 # --- Load configuration from .env ---
 load_dotenv()
@@ -32,6 +48,18 @@ missing = [k for k, v in {
 }.items() if not v]
 if missing:
     sys.exit(f"Missing env vars: {', '.join(missing)}")
+
+if args.listResourceTypes or args.listRegions:
+    listing = []
+    if args.listResourceTypes:
+        listing.append("resource types")
+    if args.listRegions:
+        listing.append("regions/locations and their reported zones")
+    print(
+        f"Listing {' and '.join(listing)}: authenticating with Azure and fetching all "
+        "Compute SKU pages. This may take some time. No data files will be written.",
+        flush=True,
+    )
 
 # --- Acquire token via client credentials on Entra ID v2 endpoint ---
 authority = f"{AUTH_AUTHORITY}/{TENANT}"
@@ -70,11 +98,32 @@ skus_url = (
 
 records = []
 all_capability_names = set()
+all_resource_types = set()
+all_zones_by_region: dict[str, set[str]] = {}
 rowcount_preview = 0
 
 for sku in fetch_all_pages(skus_url, headers):
+    resource_type = sku.get("resourceType")
+    if resource_type:
+        all_resource_types.add(resource_type)
+
+    if args.listRegions:
+        for region in sku.get("locations") or []:
+            if region:
+                all_zones_by_region.setdefault(region, set())
+        for location_info in sku.get("locationInfo") or []:
+            region = location_info.get("location")
+            if region:
+                zones = all_zones_by_region.setdefault(region, set())
+                reported_zones = location_info.get("zones")
+                if isinstance(reported_zones, list):
+                    zones.update(reported_zones)
+
+    if args.listResourceTypes or args.listRegions:
+        continue
+
     # We only care about VM sizes
-    if sku.get("resourceType") != "virtualMachines":
+    if resource_type != "virtualMachines":
         continue
 
     sku_name = sku.get("name")               # e.g., "Standard_D2as_v5"
@@ -135,6 +184,21 @@ for sku in fetch_all_pages(skus_url, headers):
                   f"Mem(GB)={rec.get('MemoryGB')} | GPUs={rec.get('GPUs')}")
             rowcount_preview += 1
 
+if args.listResourceTypes:
+    print("Resource types:")
+    for resource_type in sorted(all_resource_types):
+        print(f"  {resource_type}")
+    print(f"Total resource types: {len(all_resource_types)}")
+
+if args.listRegions:
+    print("Regions/locations and reported zones:")
+    for region, zones in sorted(all_zones_by_region.items()):
+        print(f"  {region}: {', '.join(sorted(zones)) or 'zones not reported'}")
+    print(f"Total regions/locations: {len(all_zones_by_region)}")
+
+if args.listResourceTypes or args.listRegions:
+    sys.exit(0)
+
 if not records:
     sys.exit("No VM SKU records found. Check permissions or API version.")
 
@@ -179,6 +243,7 @@ print(f"\n{'='*60}")
 print(f"SUMMARY")
 print(f"{'='*60}")
 print(f"Total rows: {len(records):,}")
+print(f"Unique resource types (before VM filter): {len(all_resource_types)}")
 print(f"Unique locations: {unique_locations}")
 print(f"Unique VM types: {unique_vm_types}")
 print(f"Time elapsed: {elapsed_time:.2f} seconds")
