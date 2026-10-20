@@ -339,6 +339,24 @@ uv sync --locked
 
 `requirements.txt` is retained as a legacy dependency list; the uv workflow uses `pyproject.toml` and `uv.lock` instead.
 
+## Tests
+
+Run the automated suite from the project root:
+
+```console
+uv run --locked python -m unittest discover -s tests -t . -v
+```
+
+The automated tests mock Azure requests and data loading; they do not require Azure credentials or refresh the saved dataset.
+
+The live Azure access check is kept separately in `tests/manual/` and is not included in unittest discovery. To run it explicitly from the project root:
+
+```powershell
+uv run --locked python tests\manual\test_access.py
+```
+
+This manual check requires the configured Azure credentials and `AZURE_RESOURCE_GROUP` in `.env`, and contacts Azure.
+
 ## Main Scripts
 
 ### fetch_vm_skus_all_regions.py
@@ -380,9 +398,15 @@ Interactive web dashboard for exploring Azure VM SKU data.
 ├── family_filters.py              # Shared family-version controls and state
 ├── docs/
 │   └── screenshots/               # Screenshots embedded in this README
-├── test_vm_sku_data.py            # SKU browser and family report tests
-├── test_region_summary.py         # Region report tests
-├── test_matrix_view.py            # Matrix, heatmap, and shared-filter tests
+├── tests/                        # Automated tests
+│   ├── __init__.py
+│   ├── test_main.py               # Interactive launcher tests
+│   ├── test_fetch_vm_skus_all_regions.py # Mocked refresh tests
+│   ├── test_vm_sku_data.py        # SKU browser and family report tests
+│   ├── test_region_summary.py     # Region report tests
+│   ├── test_matrix_view.py        # Matrix, heatmap, and shared-filter tests
+│   └── manual/
+│       └── test_access.py         # Opt-in live Azure access check
 ├── pyproject.toml                 # Project metadata, dependencies, and uv index
 ├── uv.lock                        # Locked dependency versions (commit this)
 ├── .python-version                # Preferred Python version for uv

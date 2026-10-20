@@ -83,7 +83,7 @@ class RegionPageTests(unittest.TestCase):
     def setUp(self):
         load_data.clear()
         self.addCleanup(load_data.clear)
-        self.app_path = Path(__file__).resolve().parent / "streamlit_app.py"
+        self.app_path = Path(__file__).resolve().parents[1] / "streamlit_app.py"
 
     def test_navigation_full_dataset_and_csv_download(self):
         data = region_data()

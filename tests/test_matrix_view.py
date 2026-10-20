@@ -87,7 +87,7 @@ class MatrixPageTests(unittest.TestCase):
     def setUp(self):
         load_data.clear()
         self.addCleanup(load_data.clear)
-        self.app_path = Path(__file__).resolve().parent / "streamlit_app.py"
+        self.app_path = Path(__file__).resolve().parents[1] / "streamlit_app.py"
 
     def test_filters_combine_and_csv_contains_the_matrix(self):
         data = matrix_data()

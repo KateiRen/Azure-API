@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 
-SCRIPT = Path(__file__).with_name("fetch_vm_skus_all_regions.py")
+SCRIPT = Path(__file__).resolve().parents[1] / "fetch_vm_skus_all_regions.py"
 
 
 class ExistingDataTests(unittest.TestCase):
