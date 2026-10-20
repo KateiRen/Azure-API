@@ -4,6 +4,7 @@ import csv
 import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 import requests
 import msal
 import pandas as pd
@@ -24,6 +25,36 @@ parser.add_argument(
     help="List all Compute SKU regions/locations and their reported zones without writing data files.",
 )
 args = parser.parse_args()
+
+output_dir = "data"
+out_csv = os.path.join(output_dir, "vm_skus_all_regions.csv")
+out_parquet = os.path.join(output_dir, "vm_skus_all_regions.parquet")
+existing_files = []
+if not (args.listResourceTypes or args.listRegions):
+    existing_files = [path for path in (out_csv, out_parquet) if os.path.exists(path)]
+    if existing_files:
+        now = datetime.now(timezone.utc)
+        print(f"Existing data files (current time: {now.isoformat(timespec='seconds')}):")
+        for path in existing_files:
+            modified = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc)
+            age_seconds = int((now - modified).total_seconds())
+            age = str(timedelta(seconds=abs(age_seconds)))
+            age_description = f"{age} old" if age_seconds >= 0 else f"{age} in the future"
+            print(
+                f"  {path}: last modified {modified.isoformat(timespec='seconds')}; "
+                f"age: {age_description}"
+            )
+        while True:
+            try:
+                answer = input("Remove existing data files and fetch again? [y/N]: ").strip().lower()
+            except EOFError:
+                sys.exit("No confirmation received. Existing data files were kept; nothing fetched.")
+            if answer in ("", "n", "no"):
+                print("Existing data files were kept; nothing fetched.")
+                sys.exit(0)
+            if answer in ("y", "yes"):
+                break
+            print("Please answer yes or no.")
 
 # --- Load configuration from .env ---
 load_dotenv()
@@ -203,8 +234,11 @@ if not records:
     sys.exit("No VM SKU records found. Check permissions or API version.")
 
 # --- Create output directory ---
-output_dir = "data"
 os.makedirs(output_dir, exist_ok=True)
+
+# Keep the previous files until authentication and data collection have succeeded.
+for path in existing_files:
+    os.remove(path)
 
 # --- Write a wide CSV with dynamic columns to capture every capability ---
 # Ensure consistent column order: fixed columns first, then the rest (sorted)
@@ -219,7 +253,6 @@ fixed_cols = [
 dynamic_caps = sorted([c for c in all_capability_names if c not in fixed_cols])
 fieldnames = fixed_cols + dynamic_caps
 
-out_csv = os.path.join(output_dir, "vm_skus_all_regions.csv")
 with open(out_csv, "w", newline="", encoding="utf-8") as f:
     writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
@@ -227,7 +260,6 @@ with open(out_csv, "w", newline="", encoding="utf-8") as f:
         writer.writerow(rec)
 
 # --- Write Parquet file ---
-out_parquet = os.path.join(output_dir, "vm_skus_all_regions.parquet")
 df = pd.DataFrame(records, columns=fieldnames)
 df.to_parquet(out_parquet, index=False, engine="pyarrow")
 

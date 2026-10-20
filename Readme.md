@@ -131,6 +131,14 @@ Dependencies are declared in `pyproject.toml`; `uv.lock` records their resolved 
 
 ## Usage
 
+### Interactive Launcher
+
+```console
+uv run --locked python main.py
+```
+
+The launcher checks both data files and displays their presence, size, last-modified timestamp, and age compared with the current UTC time. Choose **1** to run the data fetcher, **2** to start the Streamlit SKU browser, or **Q** to quit. The browser requires the Parquet file; if it is missing, the launcher asks you to fetch data first. Fetching retains the existing refresh-confirmation prompt described below. Both commands run from the project directory using the launcher's Python environment.
+
 ### 1. Fetch Azure VM SKU Data
 
 Run the data collection script to fetch all VM SKUs:
@@ -157,6 +165,8 @@ Tip: filter by Region or SkuName in your spreadsheet/BI tool.
 ```
 
 Output files are saved to the `data/` directory.
+
+If either output file already exists, the script shows each existing file's last-modified timestamp and its age relative to the current time (all timestamps use UTC). It asks `Remove existing data files and fetch again? [y/N]:` before contacting Azure. Enter `y` or `yes` to refresh; pressing Enter or answering `n`/`no` keeps the files and exits without fetching. Invalid answers prompt again, and unavailable input stops the script without changing the files. Confirmed files are only removed after authentication and data collection succeed, just before writing the new exports. The listing options below do not prompt or change existing files.
 
 The summary also reports the total number of distinct `resourceType` values returned by the API before the VM-only filter is applied. Exported rows remain limited to `virtualMachines`.
 
