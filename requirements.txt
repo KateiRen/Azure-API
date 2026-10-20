@@ -10,5 +10,5 @@ pandas>=2.0.0
 pyarrow>=14.0.0
 
 # Streamlit Dashboard
-streamlit>=1.28.0
+streamlit>=1.36.0
 numpy>=1.24.0

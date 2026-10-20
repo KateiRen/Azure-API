@@ -7,6 +7,9 @@ This project provides tools to fetch and explore Azure Virtual Machine SKUs acro
 - Fetch all Azure VM SKUs across all regions
 - Export data to both CSV and Parquet formats
 - Interactive Streamlit dashboard with filtering capabilities
+- Four report pages: SKU browser, Family summary, Region Summary, and Matrix View
+- Shared family-version selections across reports
+- Distinct SKU aggregation, region coverage, and a vCPU/memory heatmap
 - Detailed statistics and visualizations
 - Support for vCPU, memory, GPU, disk, and architecture filtering
 
@@ -188,11 +191,123 @@ uv run --locked streamlit run streamlit_app.py
 ```
 
 The dashboard provides:
-- Multi-select filters for region, family, tier, CPU architecture, etc.
+- Multi-select filters for region, family, CPU architecture, etc.
 - Real-time statistics (total SKUs, unique regions, unique VM types)
 - Distribution charts for top regions and VM families
 - Detailed statistics for vCPUs, memory, and disk counts
 - Downloadable filtered results
+
+The **SKU browser** sidebar includes **Other**, **v2** through **v7** family
+version checkboxes, all selected by default. These combine with the existing
+filters and update the results, statistics, charts, and CSV download. Clearing
+all version checkboxes shows no SKUs.
+Family version selections are shared across **SKU browser**, **Family summary**,
+**Region Summary**, and **Matrix View** within the same browser session. Changing
+them on one page updates the checkboxes and results when navigating to another.
+Other filters remain page-specific.
+The **vCPUs Constraints Allowed** filter offers **All** (default), **Yes**, and
+**No**. **Yes** means the API reports at least one positive allowed vCPU count
+below the SKU's reported `vCPUs`; **No** means the reported counts do not permit
+a reduction. Missing or unusable constraint/vCPU data is included only with
+**All**. This tests support for reducing vCPUs, not whether a SKU already has
+fewer active vCPUs. Tier remains in the results but has no sidebar filter.
+
+Use the sidebar navigation to switch between **SKU browser**, **Family summary**,
+**Region Summary**, and **Matrix View**.
+The family summary uses the saved dataset and shared family version selections,
+independently of the SKU browser's other filters, with one row per named family.
+It includes distinct SKU and region counts, all reported CPU architectures,
+minimum/maximum vCPU and GPU counts,
+memory (GB), and supported data disk counts. Premium IO lists all reported values
+(for example, `False, True` for families with mixed support). Missing capabilities
+are excluded from numeric ranges, not assumed to be zero; an entirely unreported
+range remains blank. Above the table, set the minimum region count (inclusive)
+and select version checkboxes: **Other**, **v2**, **v3**, **v4**, **v5**, **v6**,
+and **v7**. All versions are selected by default. Version matching is
+case-insensitive and includes qualifiers such as `v2Promo` and `v3_T4`; **Other**
+includes families without a v2-v7 version in their name. The filters combine,
+and clearing all version checkboxes shows no families. The CSV download contains
+only the filtered summary.
+
+**Region Summary** uses the shared **Other**, **v2** through **v7** family version
+checkboxes, using the same version matching as Family summary. All are selected
+at the start of a new session. Counts, zones, capabilities,
+and the CSV download are recalculated from SKUs belonging to the selected family
+versions. Regions without matching SKUs are hidden; clearing all checkboxes shows
+an empty table. With one row per matching region, it shows distinct VM SKU and
+family counts, the union of reported availability zones, zone counts, and distinct SKUs with zone
+data. Additional columns summarize CPU architectures, maximum vCPUs, memory (GB),
+and GPUs, plus Premium IO, accelerated networking, Ultra SSD, ephemeral OS disk,
+Hyper-V generations, and tiers when those fields are present in the export.
+Premium IO, accelerated networking, Ultra SSD, ephemeral OS disk, Hyper-V
+generations, and tiers are hidden by default; use the table's column visibility
+menu to show them. They remain included in the CSV download.
+Support columns list every reported value (including mixed `False, True`).
+Missing numeric capabilities remain unknown rather than zero. Zone lists are
+split and deduplicated across SKUs; **Not reported** and a blank zone count mean
+zone availability is unknown, not that a region has no zones. Each SKU may support
+only a subset of the region's reported zones.
+
+This view reflects regions listed in the saved Compute SKU response, not the
+complete Azure region catalog or guaranteed deployment capacity/subscription
+eligibility. The saved export has no geographic metadata, paired-region details,
+or SKU restrictions. Download the region summary as CSV using the button below
+the table.
+
+**Matrix View** counts distinct VM SKU names at the intersections of vCPU ranges
+(rows) and memory ranges in GB (columns). Repeated listings across regions count
+only once per cell. vCPU ranges are **1-2**, **3-4**, **5-8**, and successive
+doubling ranges through **513-1024**, with **>1024** for larger sizes. Memory
+ranges are **<=4 GB**, **>4-8 GB**, **>8-16 GB**, and successive doubling ranges
+through **>8192-16384 GB**, with **>16384 GB** for larger sizes. Upper bounds are
+inclusive; all ranges stay visible, and cells without matching SKUs show zero.
+Positive cells use a blue heatmap: stronger blue indicates higher counts relative
+to the maximum in the filtered matrix. Zero-count cells remain unshaded. Numeric
+counts and CSV exports are unchanged by the color effect.
+Missing, non-positive, or non-finite CPU/memory values are not counted.
+
+Alongside shared family versions, Matrix View has independent multiselect filters
+for **Region**, **CPU Architecture Type**, and **# GPUs**; empty selections mean
+all values. **Not reported** in the GPU filter means unknown, not zero GPUs.
+The CSV download contains the filtered matrix with its row and column labels.
+
+Page navigation requires Streamlit 1.36 or newer.
+
+## Report Screenshots
+
+These screenshots show the default reports using a saved API export. Counts vary
+with the dataset and selected filters. Click an image to inspect the full-size
+report.
+
+### SKU Browser
+
+Browse individual region/SKU records with sidebar filters, summary statistics,
+distribution charts, selectable result columns, and CSV export.
+
+[![SKU Browser with family-version filters, statistics, charts, and SKU results](docs/screenshots/sku-browser.png)](docs/screenshots/sku-browser.png)
+
+### Family Summary
+
+Compare one row per VM family, including distinct SKU and region counts, hardware
+ranges, CPU architectures, and storage support. Filter by minimum region coverage
+and shared family versions.
+
+[![Family Summary table with minimum-region and family-version filters](docs/screenshots/family-summary.png)](docs/screenshots/family-summary.png)
+
+### Region Summary
+
+Compare regional SKU coverage, family counts, reported availability zones, CPU
+architectures, and hardware maxima. Additional support columns can be revealed
+from the table's column visibility menu.
+
+[![Region Summary table showing SKU counts, reported zones, and regional hardware capabilities](docs/screenshots/region-summary.png)](docs/screenshots/region-summary.png)
+
+### Matrix View
+
+Explore distinct VM types by vCPU and memory range. The blue heatmap responds to
+family-version, region, CPU architecture, and GPU-count selections.
+
+[![Matrix View showing the vCPU and memory heatmap with region, architecture, and GPU filters](docs/screenshots/matrix-view.png)](docs/screenshots/matrix-view.png)
 
 ## Managing Dependencies
 
@@ -232,17 +347,32 @@ Interactive web dashboard for exploring Azure VM SKU data.
 
 **Key Features:**
 - Reads Parquet data for fast loading
-- Multi-dimensional filtering (region, family, tier, CPU arch, etc.)
+- Four navigable reports with shared family-version filters
+- Multi-dimensional filtering (region, family, CPU architecture, GPUs, etc.)
 - Real-time statistics and visualizations
 - Customizable column display
-- CSV export of filtered data
+- Distinct SKU aggregation for family and region summaries
+- vCPU/memory count matrix with a filter-aware heatmap
+- CSV export of filtered data and summaries
 
 ## Project Structure
 
 ```
 .
 ├── fetch_vm_skus_all_regions.py  # Data collection script
-├── streamlit_app.py               # Interactive dashboard
+├── streamlit_app.py               # Dashboard entry point and report navigation
+├── app_pages/                     # Streamlit report pages
+│   ├── sku_browser.py
+│   ├── family_summary.py
+│   ├── region_summary.py
+│   └── matrix_view.py
+├── vm_sku_data.py                 # Shared data loading and report aggregations
+├── family_filters.py              # Shared family-version controls and state
+├── docs/
+│   └── screenshots/               # Screenshots embedded in this README
+├── test_vm_sku_data.py            # SKU browser and family report tests
+├── test_region_summary.py         # Region report tests
+├── test_matrix_view.py            # Matrix, heatmap, and shared-filter tests
 ├── pyproject.toml                 # Project metadata, dependencies, and uv index
 ├── uv.lock                        # Locked dependency versions (commit this)
 ├── .python-version                # Preferred Python version for uv
@@ -272,6 +402,7 @@ Interactive web dashboard for exploring Azure VM SKU data.
 - Ensure you've run `fetch_vm_skus_all_regions.py` first to generate data files
 - Verify the `data/` directory exists with the parquet file
 - Run `uv sync --locked` to ensure all required packages are installed, then launch with `uv run --locked streamlit run streamlit_app.py`
+- If a newly added report raises an `ImportError` for a function that exists on disk, stop the running app with **Ctrl+C** and restart it. A long-running server can retain an older imported module; refreshing the browser alone may not reload it.
 
 **uv setup errors:**
 - If `uv` is not recognized, reopen your terminal after installation and verify `uv --version` works
