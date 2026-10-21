@@ -69,6 +69,12 @@ def summarize_regions(df: pd.DataFrame) -> pd.DataFrame:
         "Max Memory (GB)": ("MemoryGB", "max"),
         "Max GPU": ("GPUs", "max"),
     }
+    priced_sku_count = "SKUs with price data"
+    if "retail price" in data.columns:
+        data["_PricedSkuName"] = data["SkuName"].where(
+            pd.to_numeric(data["retail price"], errors="coerce").notna()
+        )
+        aggregations[priced_sku_count] = ("_PricedSkuName", "nunique")
     for label, column in (
         ("Premium IO", "PremiumIO"),
         ("Accelerated Networking", "AcceleratedNetworkingEnabled"),
@@ -89,6 +95,8 @@ def summarize_regions(df: pd.DataFrame) -> pd.DataFrame:
         ).astype("Int64"),
     )
     summary["Availability Zones"] = summary["Availability Zones"].replace("", "Not reported")
+    if priced_sku_count in summary.columns:
+        summary.insert(2, priced_sku_count, summary.pop(priced_sku_count))
     return summary
 
 

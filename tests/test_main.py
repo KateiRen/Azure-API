@@ -83,27 +83,59 @@ class LauncherTests(unittest.TestCase):
 
     def test_browser_starts_with_parquet_even_without_csv(self):
         self.create_file(self.parquet)
-        code, _, run = self.run_launcher(["2"])
+        code, _, run = self.run_launcher(["3"])
         self.assertEqual(code, 0)
         run.assert_called_once_with(
             [sys.executable, "-m", "streamlit", "run", str(self.root / "streamlit_app.py")],
             cwd=self.root,
         )
+        self.assertIn("3. Open the SKU browser (Streamlit)", self.stdout.getvalue())
 
     def test_csv_alone_cannot_start_browser(self):
         self.create_file(self.csv)
-        code, prompt, run = self.run_launcher(["2", "q"])
+        code, prompt, run = self.run_launcher(["3", "q"])
         self.assertEqual(code, 0)
         self.assertEqual(prompt.call_count, 2)
         run.assert_not_called()
         self.assertIn("Cannot open the SKU browser", self.stdout.getvalue())
+
+    def test_prices_use_current_interpreter_and_project_directory(self):
+        self.create_file(self.parquet)
+        code, prompt, run = self.run_launcher(["2"])
+        self.assertEqual(code, 0)
+        prompt.assert_called_once()
+        run.assert_called_once_with(
+            [sys.executable, str(self.root / "fetch_vm_sku_prices.py")],
+            cwd=self.root,
+        )
+        self.assertIn("2. Fetch prices for saved VM SKUs", self.stdout.getvalue())
+        self.assertEqual(self.parquet.read_bytes(), b"test data")
+
+    def test_prices_require_parquet_even_if_csv_exists(self):
+        for csv_exists in (False, True):
+            with self.subTest(csv_exists=csv_exists):
+                if csv_exists:
+                    self.create_file(self.csv)
+                code, prompt, run = self.run_launcher(["2", "q"])
+                self.assertEqual(code, 0)
+                self.assertEqual(prompt.call_count, 2)
+                run.assert_not_called()
+                self.assertIn("Cannot fetch VM prices", self.stdout.getvalue())
+                self.assertIn("Choose 1 to fetch it.", self.stdout.getvalue())
+
+    def test_price_fetch_failure_is_reported_and_propagated(self):
+        self.create_file(self.parquet)
+        code, _, run = self.run_launcher(["2"], returncode=2)
+        self.assertEqual(code, 2)
+        run.assert_called_once()
+        self.assertIn("exited with code 2", self.stderr.getvalue())
 
     def test_invalid_choice_prompts_again(self):
         code, prompt, run = self.run_launcher(["invalid", "", "Q"])
         self.assertEqual(code, 0)
         self.assertEqual(prompt.call_count, 3)
         run.assert_not_called()
-        self.assertIn("Please choose 1, 2, or Q.", self.stdout.getvalue())
+        self.assertIn("Please choose 1, 2, 3, or Q.", self.stdout.getvalue())
 
     def test_unavailable_input_reports_failure_without_starting_command(self):
         code, _, run = self.run_launcher([EOFError()])

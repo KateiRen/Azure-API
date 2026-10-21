@@ -27,16 +27,17 @@ def main() -> int:
         )
 
     if parquet.is_file():
-        print("Saved data is available for the SKU browser.")
+        print("Saved data is available for the SKU browser and price fetching.")
     else:
-        print("The SKU browser requires a Parquet data file. Fetch new data first.")
+        print("The SKU browser and price fetching require a Parquet data file. Fetch new data first.")
 
     print("\n1. Fetch new Azure VM SKU data")
-    print("2. Open the SKU browser (Streamlit)")
+    print("2. Fetch prices for saved VM SKUs")
+    print("3. Open the SKU browser (Streamlit)")
     print("Q. Quit")
     while True:
         try:
-            choice = input("Choose an option [1/2/Q]: ").strip().lower()
+            choice = input("Choose an option [1/2/3/Q]: ").strip().lower()
         except EOFError:
             print("No selection received; nothing started.", file=sys.stderr)
             return 1
@@ -47,6 +48,12 @@ def main() -> int:
             break
         if choice == "2":
             if not parquet.is_file():
+                print("Cannot fetch VM prices: Parquet data is missing. Choose 1 to fetch it.")
+                continue
+            command = [sys.executable, str(project_dir / "fetch_vm_sku_prices.py")]
+            break
+        if choice == "3":
+            if not parquet.is_file():
                 print("Cannot open the SKU browser: Parquet data is missing. Choose 1 to fetch it.")
                 continue
             command = [
@@ -54,7 +61,7 @@ def main() -> int:
                 str(project_dir / "streamlit_app.py"),
             ]
             break
-        print("Please choose 1, 2, or Q.")
+        print("Please choose 1, 2, 3, or Q.")
 
     result = subprocess.run(command, cwd=project_dir)
     if result.returncode:

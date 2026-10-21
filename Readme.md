@@ -137,7 +137,7 @@ Dependencies are declared in `pyproject.toml`; `uv.lock` records their resolved 
 uv run --locked python main.py
 ```
 
-The launcher checks both data files and displays their presence, size, last-modified timestamp, and age compared with the current UTC time. Choose **1** to run the data fetcher, **2** to start the Streamlit SKU browser, or **Q** to quit. The browser requires the Parquet file; if it is missing, the launcher asks you to fetch data first. Fetching retains the existing refresh-confirmation prompt described below. Both commands run from the project directory using the launcher's Python environment.
+The launcher checks both data files and displays their presence, size, last-modified timestamp, and age compared with the current UTC time. Choose **1** to run the data fetcher, **2** to fetch prices for the saved VM SKUs, **3** to start the Streamlit SKU browser, or **Q** to quit. The browser and price fetching require the Parquet file; if it is missing, the launcher asks you to fetch data first. Data fetching retains the existing refresh-confirmation prompt described below. Price fetching runs `fetch_vm_sku_prices.py` with the default primary-only policy and retains its recreate/update prompt, diagnostics, and provenance reports. For optional nonprimary prices, use the standalone script with `--allow-nonprimary` as documented below. All commands run from the project directory using the launcher's Python environment.
 
 ### 1. Fetch Azure VM SKU Data
 
@@ -264,6 +264,13 @@ eligibility. The saved export has no geographic metadata, paired-region details,
 or SKU restrictions. Download the region summary as CSV using the button below
 the table.
 
+When the saved Parquet includes `retail price`, Region Summary also shows
+**SKUs with price data** next to **VM SKU Count**. It counts distinct
+SKU names per region with a reported numeric retail price, including zero, after
+the selected family-version filters. Reservation-only matches do not count.
+The column is included in the summary CSV and is omitted when `retail price`
+is absent.
+
 **Matrix View** counts distinct VM SKU names at the intersections of vCPU ranges
 (rows) and memory ranges in GB (columns). Repeated listings across regions count
 only once per cell. vCPU ranges are **1-2**, **3-4**, **5-8**, and successive
@@ -318,6 +325,227 @@ Explore distinct VM types by vCPU and memory range. The blue heatmap responds to
 family-version, region, CPU architecture, and GPU-count selections.
 
 [![Matrix View showing the vCPU and memory heatmap with region, architecture, and GPU filters](docs/screenshots/matrix-view.png)](docs/screenshots/matrix-view.png)
+
+## Cache Official Azure Region Metadata
+
+Fetch the official subscription Locations API response:
+
+```console
+uv run --locked python fetch_azure_locations.py
+```
+
+This saves `data/azure_locations.json`, preserving every returned location field
+and nested metadata, including geography, geography group, physical location,
+coordinates, region type, and paired-region details where Azure supplies them.
+The JSON also records its UTC fetch timestamp, API version, subscription ID and
+source URL. It does not contain access tokens or client secrets. Normal
+locations are requested without extended/edge locations.
+
+The script uses the same `.env` service-principal settings as the SKU fetcher:
+`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and
+`AZURE_SUBSCRIPTION_ID`, with the existing optional authority/scope/API-base
+overrides. The principal must have permission to list subscription locations.
+
+An existing valid cache is reused without authenticating or contacting Azure.
+It has no automatic expiration; explicitly refresh it with:
+
+```console
+uv run --locked python fetch_azure_locations.py --refresh
+```
+
+Use `--output` to choose another JSON cache file. Malformed caches or a cache for
+a different configured subscription produce an error rather than being silently
+reused. Refreshes replace the old file atomically only after the complete
+response has been downloaded and validated; failures preserve the old cache.
+Progress and a metadata-coverage summary are printed.
+
+This is subscription-specific location metadata, not a guarantee that every
+service or VM SKU is deployable in each location. Logical/global entries are
+preserved if returned. Azure geography groups are not continents; this step
+does not infer continents or modify the SKU Parquet/CSV or Streamlit reports.
+Like other generated data, the cache is excluded from Git by `data/`.
+
+## Enrich Saved SKUs with Pricing
+
+Run the standalone pricing script after collecting VM SKUs:
+
+```console
+uv run --locked python fetch_vm_sku_prices.py
+```
+
+This reads `data/vm_skus_all_regions.parquet` and **updates that Parquet and
+regenerates its sibling CSV in place**, retaining all input rows and capability
+columns and adding/replacing exactly three numeric columns:
+
+| Column | Meaning |
+| --- | --- |
+| `retail price` | Linux/base-compute pay-as-you-go USD per hour |
+| `1Y RI` | 1-year reserved-instance effective USD per hour: API term total / 8,760 |
+| `3Y RI` | 3-year reserved-instance effective USD per hour: API term total / 26,280 |
+
+If any of these pricing columns already exist, the script asks how to handle them
+before contacting the API:
+
+- **1 - Recreate:** clear all three pricing columns in memory and populate them
+  from the current API results. Unmatched or conflicting prices will be blank.
+- **2 - Update (default):** overwrite each price only when the API returns an
+  unambiguous match, including a reported zero price. Keep existing values when
+  a match is missing or conflicting, and create any missing pricing columns.
+  This reprices already populated cells too, not just blanks. Press Enter to
+  select this mode.
+
+After upgrading pricing rules, **recreate mode is recommended** for a clean
+rebuild: update mode can retain historical values that the current rules cannot
+verify. All currently matched prices are re-evaluated in either mode.
+
+Invalid selections prompt again. If input is unavailable, the script exits with
+an error without contacting the API or modifying either file. If no pricing
+columns exist, it creates them without prompting. Neither choice deletes columns
+from disk before the download and export succeed.
+
+The script uses the public, unauthenticated
+[Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices).
+No Azure credentials are required. Requests are grouped by region and follow all
+API pages, with timeouts and bounded retries for throttling/transient failures.
+Progress shows the current region, page, downloaded meter count, and matched rows.
+Downloading prices for every region can take several minutes or longer.
+
+Matching uses exact `Region` + `SkuName` identifiers (case-insensitive), not
+display-name guesses or prices from another region. By default, only primary,
+zero-tier, hourly USD VM meters are accepted. Windows (including standalone
+`Win` abbreviations), Cloud Services (`Cloud Services` or `CloudServices`), Spot,
+Low Priority, DevTest and savings plan prices are excluded **before** choosing
+the latest effective date. A product does not have to start with the words
+`Virtual Machines`; explicitly labelled Linux products are still accepted.
+These are public list prices, not your negotiated rates;
+OS/software licensing, taxes, disks, and other services are not included.
+RI hourly rates use fixed 365-day years for comparison, not actual monthly billing.
+
+The latest effective price not in the future is selected for each price column.
+Conflicting prices at that date produce a warning rather than an arbitrary
+minimum. Missing/conflicting prices remain null/blank in recreate mode; update
+mode keeps any previous value instead. Retained values may be older than the
+current download. Missing prices are never substituted with zero. A missing
+match does not prove that a SKU or reservation is unavailable.
+
+The final summary reports coverage for **distinct region/SKU pairs**, including
+retail/1Y/3Y counts and percentages of all pairs, RI percentages among
+retail-matched pairs, distinct SKU-name coverage, conflicts, and elapsed time.
+Repeated input rows do not inflate these percentages. Coverage describes the
+final stored values, including retained prices in update mode; the per-region
+matched count reports only retail prices found in the current API download.
+
+### Optional nonprimary fallback
+
+Nonprimary fallback is **disabled by default**. To explicitly enable it:
+
+```console
+uv run --locked python fetch_vm_sku_prices.py --allow-nonprimary
+```
+
+This requests all meters and prefers eligible primary offers independently for
+each price column. Only if **no eligible primary offer exists** can an
+unambiguous nonprimary offer at its latest effective date be used. It must still
+match the exact region/SKU, base-compute offer, currency, unit and reservation
+term. The script never resolves a primary conflict by switching to a nonprimary
+offer, takes an arbitrary minimum, guesses SKU aliases, or uses another region.
+Unknown primary-meter flags are not accepted as fallback candidates.
+
+Each selected fallback is labelled in console progress and provenance. The
+primary/nonprimary policy applies to newly selected prices; update mode can
+still retain previous fallback values, marked `retained`, even when fallback is
+disabled for the current scan. An absent exact regional match remains blank
+(or retains its old value in update mode).
+
+### Price provenance and zero-price warnings
+
+Every successful export also creates/replaces
+`data/vm_skus_all_regions_pricing_provenance.csv` (or
+`<input-stem>_pricing_provenance.csv` beside a custom input). This companion CSV
+keeps the dataset's three price columns numeric without adding metadata columns
+to the inventory itself.
+
+It records each distinct stored price and its source:
+
+- `fresh_primary` / `fresh_nonprimary`: selected by this API scan, with product,
+  SKU and meter names/IDs, raw API price, term, unit, primary flag, effective
+  date, fetch time, and pricing-rule version.
+- `retained`: not verified by this scan. If the previous provenance report
+  contains that exact region/SKU/column/**price value**, the original source and
+  fetch time are preserved; only the last-checked timestamp changes. Otherwise,
+  the source and original fetch time are explicitly unknown. Retained metadata
+  keeps its original rule version, rather than claiming verification by newer
+  rules.
+
+For equivalent same-date offers with identical prices, source selection is
+deterministic and `EquivalentOfferCount` records the number of distinct offers.
+Conflicting prices are still not selected. The summary counts fresh primary,
+fresh nonprimary and retained values separately.
+
+Reported zero prices remain zero, but receive console warnings, a provenance
+warning, and (for newly selected prices) a `zero_price_verify` diagnostic entry.
+They should be checked before interpreting the VM as free.
+
+An existing provenance report is read only for update mode. A malformed or
+contradictory report stops the run explicitly rather than assigning unreliable
+source metadata; recreate mode rebuilds it without reusing old metadata.
+
+### Pricing diagnostics report
+
+Each completed API scan creates/replaces
+`data/vm_skus_all_regions_pricing_diagnostics.csv` automatically. With `--input`,
+the report is saved beside that input as `<input-stem>_pricing_diagnostics.csv`.
+The script prints the report path and row count.
+
+The report covers each region/SKU/price-column combination that could not be
+updated from the current API scan, even when update mode retains an existing
+price:
+
+- `conflict`: one row per competing API record at the latest eligible effective
+  date. Older prices and excluded offers are not included as conflict candidates.
+- `no_api_match`: no exact region/`armSkuName` record was returned in the downloaded
+  data. One row is recorded for each missing price column.
+- `no_eligible_price`: exact records exist, but none qualifies for that price
+  column. Rows list the available offers and reasons such as Windows, Cloud
+  Services, Spot, unsupported type/term, another price column, nonhourly units,
+  or future dates.
+- `zero_price_verify`: a selected API price is zero and requires verification.
+
+Columns include inventory `Region`, `SkuName`, `PriceColumn`, `Status`, `Reason`,
+and `ExistingPriceRetained`, plus API product/SKU/meter names and IDs, price type,
+reservation term, effective date, raw retail price, currency, unit, tier, primary
+meter flag, and the calculated hourly price for eligible candidates.
+Repeated identical report rows are removed; a run with no issues still writes
+the column headers, replacing any old report.
+
+Diagnostics describe only records returned by the current query; they cannot
+prove why Azure omitted a SKU or show records filtered out by the server.
+Several offer rows can describe one missing price cell, so the report row count
+is not the number of affected SKUs.
+
+The report is written atomically after a successful API scan and **before** the
+data exports are replaced. If report writing fails, the data exports remain
+unchanged. If a later data-export step fails, the new report still describes that
+completed scan, not a successfully saved dataset. A failed download does not
+replace the previous report.
+
+The Parquet, data CSV and provenance CSV are fully serialized before any of
+those originals is replaced. Download/serialization failures leave them
+unchanged. If replacement fails, the script attempts to restore all already
+replaced files and reports any rollback failure with retained backup paths.
+These replacements are not a filesystem-wide transaction; avoid concurrent
+data fetches or writes and back up valuable exports before running. Diagnostics
+remain a report of the API scan even if a later export fails.
+
+For a different input file (also updated in place, with its sibling CSV):
+
+```powershell
+uv run --locked python fetch_vm_sku_prices.py --input "C:\path\to\skus.parquet"
+```
+
+Fetching fresh VM SKU data again replaces the exports and removes these pricing
+columns; rerun the pricing script afterward. Restart the dashboard if it still
+shows cached data.
 
 ## Managing Dependencies
 
@@ -388,6 +616,8 @@ Interactive web dashboard for exploring Azure VM SKU data.
 ```
 .
 ├── fetch_vm_skus_all_regions.py  # Data collection script
+├── fetch_azure_locations.py       # Cache official Azure location metadata
+├── fetch_vm_sku_prices.py         # Enrich saved exports with hourly USD prices
 ├── streamlit_app.py               # Dashboard entry point and report navigation
 ├── app_pages/                     # Streamlit report pages
 │   ├── sku_browser.py
@@ -401,7 +631,9 @@ Interactive web dashboard for exploring Azure VM SKU data.
 ├── tests/                        # Automated tests
 │   ├── __init__.py
 │   ├── test_main.py               # Interactive launcher tests
+│   ├── test_fetch_azure_locations.py # Location API and cache tests
 │   ├── test_fetch_vm_skus_all_regions.py # Mocked refresh tests
+│   ├── test_fetch_vm_sku_prices.py # Pricing matching, paging, and export tests
 │   ├── test_vm_sku_data.py        # SKU browser and family report tests
 │   ├── test_region_summary.py     # Region report tests
 │   ├── test_matrix_view.py        # Matrix, heatmap, and shared-filter tests
@@ -416,6 +648,7 @@ Interactive web dashboard for exploring Azure VM SKU data.
 ├── .gitignore                     # Git ignore rules
 ├── Readme.md                      # This file
 └── data/                          # Output directory (created automatically)
+    ├── azure_locations.json       # Official location metadata cache
     ├── vm_skus_all_regions.csv
     └── vm_skus_all_regions.parquet
 ```

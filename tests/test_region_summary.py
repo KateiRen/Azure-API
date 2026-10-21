@@ -78,6 +78,32 @@ class RegionSummaryTests(unittest.TestCase):
         self.assertTrue(result.empty)
         self.assertEqual(list(result.columns), list(summarize_regions(data).columns))
 
+    def test_retail_price_count_is_distinct_includes_zero_and_ignores_ri_only(self):
+        data = region_data()
+        data["retail price"] = [None, None, "0.1", 0, None]
+        data["1Y RI"] = 1
+        data["3Y RI"] = 2
+        before = data.copy(deep=True)
+        result = summarize_regions(data)
+        column = "SKUs with price data"
+        self.assertEqual(result.columns[2], column)
+        self.assertEqual(result[column].tolist(), [2, 0])
+        self.assertEqual(result["VM SKU Count"].tolist(), [3, 1])
+        pd.testing.assert_frame_equal(data, before)
+        data["retail price"] = [None, "", "not reported", None, None]
+        self.assertEqual(summarize_regions(data)[column].tolist(), [0, 0])
+
+    def test_price_column_is_optional_and_empty_summary_keeps_it(self):
+        column = "SKUs with price data"
+        data = region_data().assign(**{"1Y RI": 1})
+        self.assertNotIn(column, summarize_regions(data).columns)
+        data["retail price"] = None
+        expected = summarize_regions(data)
+        self.assertEqual(expected[column].tolist(), [0, 0])
+        empty = summarize_regions(data.iloc[:0])
+        self.assertTrue(empty.empty)
+        self.assertEqual(empty.columns.tolist(), expected.columns.tolist())
+
 
 class RegionPageTests(unittest.TestCase):
     def setUp(self):
@@ -175,6 +201,36 @@ class RegionPageTests(unittest.TestCase):
             self.assertTrue(app.dataframe[0].value.empty)
             app.checkbox(key="region_family_version_other").check().run()
             self.assertEqual(app.dataframe[0].value["Region"].tolist(), ["east", "west"])
+
+    def test_retail_price_count_is_visible_filtered_and_exported(self):
+        data = region_data()
+        data["Family"] = data["Family"].replace({"F1": "standardDv2Family", "F2": "standardDv6Family"})
+        data["retail price"] = [0.5, 0.1, None, None, 0]
+        data["1Y RI"] = 1
+        column = "SKUs with price data"
+        with (
+            patch("vm_sku_data.pd.read_parquet", return_value=data),
+            patch("streamlit.download_button", wraps=st.download_button) as download,
+        ):
+            app = AppTest.from_file(str(self.app_path)).run()
+            app.switch_page("app_pages/region_summary.py").run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(app.dataframe[0].value[column].tolist(), [2, 1])
+            self.assertEqual(list(app.dataframe[0].proto.column_order)[2], column)
+            for checkbox in app.checkbox:
+                checkbox.set_value(checkbox.label == "v6")
+            app.run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(app.dataframe[0].value["Region"].tolist(), ["east"])
+            self.assertEqual(app.dataframe[0].value[column].tolist(), [1])
+            csv = pd.read_csv(io.BytesIO(download.call_args.kwargs["data"]))
+            self.assertEqual(csv[column].tolist(), [1])
+            for checkbox in app.checkbox:
+                checkbox.uncheck()
+            app.run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertTrue(app.dataframe[0].value.empty)
+            self.assertIn(column, app.dataframe[0].value.columns)
 
     def test_missing_file_shows_actionable_error(self):
         with patch("vm_sku_data.pd.read_parquet", side_effect=FileNotFoundError):

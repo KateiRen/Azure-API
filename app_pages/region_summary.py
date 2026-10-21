@@ -36,6 +36,11 @@ st.caption(
     "Regions without matching SKUs are hidden."
 )
 summary = summarize_regions(filter_family_versions(df, selected_versions))
+if "retail price" in df.columns:
+    st.caption(
+        "'SKUs with price data' counts distinct SKUs with a reported retail "
+        "price, including zero. SKUs with only reservation prices do not count."
+    )
 if summary.empty:
     st.info("No regions match the selected family versions.")
 st.markdown(f"Showing **{len(summary)}** regions")
