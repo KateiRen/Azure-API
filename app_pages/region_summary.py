@@ -1,6 +1,7 @@
 import streamlit as st
 
 from family_filters import family_version_checkboxes, filter_family_versions
+from pricing_filters import filter_pricing, pricing_checkboxes
 from vm_sku_data import load_data, summarize_regions
 
 
@@ -31,18 +32,24 @@ except (OSError, ValueError) as error:
     st.stop()
 
 selected_versions = family_version_checkboxes("region_family_version")
+st.sidebar.divider()
+st.sidebar.header("🔍 Filters")
+required_prices = pricing_checkboxes(df, "region")
 st.caption(
-    "Counts, zones, and capabilities reflect only the selected family versions. "
-    "Regions without matching SKUs are hidden."
+    "Counts, zones, and capabilities reflect only SKUs matching the selected family "
+    "versions and pricing filters. All checked price types must be present; zero "
+    "counts as a price. Regions without matching SKUs are hidden."
 )
-summary = summarize_regions(filter_family_versions(df, selected_versions))
+summary = summarize_regions(filter_pricing(
+    filter_family_versions(df, selected_versions), required_prices,
+))
 if "retail price" in df.columns:
     st.caption(
         "'SKUs with price data' counts distinct SKUs with a reported retail "
         "price, including zero. SKUs with only reservation prices do not count."
     )
 if summary.empty:
-    st.info("No regions match the selected family versions.")
+    st.info("No regions match the selected filters.")
 st.markdown(f"Showing **{len(summary)}** regions")
 hidden_columns = {
     "Premium IO", "Accelerated Networking", "Ultra SSD",

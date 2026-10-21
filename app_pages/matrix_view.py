@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from family_filters import family_version_checkboxes, filter_family_versions
+from region_map_data import geography_groups_for_regions, load_region_locations
 from vm_sku_data import load_data, summarize_matrix
 
 
@@ -29,12 +30,52 @@ except (OSError, ValueError) as error:
 
 selected_versions = family_version_checkboxes("matrix_family_version")
 st.caption("Family version selections are shared across all pages; other filters are page-specific.")
-region_column, architecture_column, gpu_column = st.columns(3)
+geography_available = False
+try:
+    df = df.assign(**{
+        "Geography group": geography_groups_for_regions(
+            df["Region"], load_region_locations()["value"],
+        ),
+    })
+    geography_available = True
+except FileNotFoundError:
+    st.warning(
+        "Geography Group filtering is unavailable. Run "
+        "`uv run --locked python fetch_azure_locations.py` to create the location cache."
+    )
+except (OSError, ValueError) as error:
+    st.error(
+        "Unable to load geography metadata; Geography Group filtering is disabled. "
+        "Check the error and refresh the location cache if needed."
+    )
+    st.exception(error)
+
+geography_column, region_column, architecture_column, gpu_column = st.columns(4)
+if not geography_available:
+    st.session_state["matrix_geography_groups"] = []
+selected_geographies = geography_column.multiselect(
+    "Geography Group",
+    options=sorted(df["Geography group"].unique()) if geography_available else [],
+    key="matrix_geography_groups",
+    disabled=not geography_available,
+    help=(
+        "Select one or more official geographyGroup values. Empty means all groups. "
+        "Not assigned includes regions without geography-group metadata."
+    ),
+)
+geography_df = (
+    df[df["Geography group"].isin(selected_geographies)] if selected_geographies else df
+)
+region_options = sorted(geography_df["Region"].dropna().unique())
+if any(region not in region_options for region in st.session_state.get("matrix_region", [])):
+    st.session_state["matrix_region"] = [
+        region for region in st.session_state["matrix_region"] if region in region_options
+    ]
 selected_regions = region_column.multiselect(
     "Region",
-    options=sorted(df["Region"].dropna().unique()),
+    options=region_options,
     key="matrix_region",
-    help="Leave empty to include all regions.",
+    help="Leave empty to include all regions in the selected geography groups.",
 )
 selected_architectures = architecture_column.multiselect(
     "CPU Architecture Type",
@@ -55,7 +96,7 @@ selected_gpus = gpu_column.multiselect(
     help="Leave empty to include all GPU counts. Not reported is unknown, not zero.",
 )
 
-filtered = filter_family_versions(df, selected_versions)
+filtered = filter_family_versions(geography_df, selected_versions)
 if selected_regions:
     filtered = filtered[filtered["Region"].isin(selected_regions)]
 if selected_architectures:

@@ -1,6 +1,7 @@
 import streamlit as st
 
 from family_filters import family_version_checkboxes, filter_family_versions
+from pricing_filters import filter_pricing, pricing_checkboxes
 from vm_sku_data import load_data, summarize_families
 
 
@@ -23,7 +24,14 @@ except (OSError, ValueError) as error:
     st.exception(error)
     st.stop()
 
-summary = summarize_families(df)
+st.sidebar.divider()
+st.sidebar.header("🔍 Filters")
+required_prices = pricing_checkboxes(df, "family")
+st.caption(
+    "Counts and capability ranges reflect only SKUs matching the selected pricing "
+    "filters. All checked price types must be present; zero counts as a price."
+)
+summary = summarize_families(filter_pricing(df, required_prices))
 region_column, version_column = st.columns([1, 3], vertical_alignment="bottom")
 with region_column:
     min_regions = st.number_input(

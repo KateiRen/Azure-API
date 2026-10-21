@@ -9,8 +9,10 @@ st.set_page_config(
     layout="wide",
 )
 
+st.sidebar.header("☁️ Azure VM SKU Explorer")
+
 pages_dir = Path(__file__).resolve().parent / "app_pages"
-page = st.navigation([
+pages = [
     st.Page(
         pages_dir / "sku_browser.py",
         title="SKU browser",
@@ -28,9 +30,17 @@ page = st.navigation([
         icon=":material/public:",
     ),
     st.Page(
+        pages_dir / "region_map.py",
+        title="Region Map",
+        icon=":material/map:",
+    ),
+    st.Page(
         pages_dir / "matrix_view.py",
         title="Matrix View",
         icon=":material/grid_on:",
     ),
-])
+]
+page = st.navigation(pages, position="hidden")
+for report in pages:
+    st.sidebar.page_link(report, label=report.title, icon=report.icon, width="stretch")
 page.run()

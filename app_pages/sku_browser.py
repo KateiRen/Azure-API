@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 
 from family_filters import family_version_checkboxes, filter_family_versions
+from pricing_filters import filter_pricing, pricing_checkboxes
+from region_map_data import geography_groups_for_regions, load_region_locations
 from vm_sku_data import load_data
 
 # Title and description
@@ -11,18 +13,63 @@ st.markdown("Explore Azure VM SKUs across all regions with interactive filters a
 
 try:
     df = load_data()
+    selected_versions = family_version_checkboxes("sku_family_version")
 
     # Sidebar filters
+    st.sidebar.divider()
     st.sidebar.header("🔍 Filters")
 
+    geography_available = False
+    try:
+        df = df.assign(**{
+            "Geography group": geography_groups_for_regions(
+                df["Region"], load_region_locations()["value"],
+            ),
+        })
+        geography_available = True
+    except FileNotFoundError:
+        st.sidebar.warning(
+            "Geography Group filtering is unavailable. Run "
+            "`uv run --locked python fetch_azure_locations.py` to create the location cache."
+        )
+    except (OSError, ValueError) as error:
+        st.sidebar.error(
+            "Unable to load geography metadata; Geography Group filtering is disabled. "
+            "Check the error and refresh the location cache if needed."
+        )
+        with st.sidebar:
+            st.exception(error)
+    if not geography_available:
+        st.session_state["sku_geography_groups"] = []
+    selected_geographies = st.sidebar.multiselect(
+        "Geography Group",
+        options=sorted(df["Geography group"].unique()) if geography_available else [],
+        key="sku_geography_groups",
+        disabled=not geography_available,
+        help=(
+            "Select one or more official geographyGroup values. Empty means all groups. "
+            "Not assigned includes regions without geography-group metadata."
+        ),
+    )
+    geography_df = (
+        df[df["Geography group"].isin(selected_geographies)] if selected_geographies else df
+    )
+
     # Region filter (multiselect)
-    regions = sorted(df['Region'].dropna().unique())
+    regions = sorted(geography_df['Region'].dropna().unique())
+    if any(region not in regions for region in st.session_state.get("sku_region", [])):
+        st.session_state["sku_region"] = [
+            region for region in st.session_state["sku_region"] if region in regions
+        ]
     selected_regions = st.sidebar.multiselect(
         "Region",
         options=regions,
         default=None,
-        help="Select one or more regions"
+        key="sku_region",
+        help="Select one or more regions within the selected geography groups"
     )
+
+    required_prices = pricing_checkboxes(df, "sku")
 
     # Family filter (multiselect)
     families = sorted(df['Family'].dropna().unique())
@@ -30,11 +77,9 @@ try:
         "Family",
         options=families,
         default=None,
+        key="sku_families",
         help="Select VM families (e.g., Dasv5, Dv5)"
     )
-
-    with st.sidebar:
-        selected_versions = family_version_checkboxes("sku_family_version", horizontal=False)
 
     # CPU Architecture filter
     cpu_archs = sorted(df['CpuArchitectureType'].dropna().unique())
@@ -45,24 +90,31 @@ try:
         help="Select CPU architecture (x64, Arm64, etc.)"
     )
 
-    # PremiumIO filter
-    premium_io_options = sorted(df['PremiumIO'].dropna().unique())
-    selected_premium_io = st.sidebar.multiselect(
+    if 'PremiumIO' not in df.columns:
+        st.session_state["sku_premium_io"] = False
+    selected_premium_io = st.sidebar.checkbox(
         "Premium IO",
-        options=premium_io_options,
-        default=None,
-        help="Filter by Premium IO support"
+        key="sku_premium_io",
+        disabled='PremiumIO' not in df.columns,
+        help=(
+            "Show only SKUs with reported Premium IO support. "
+            "Unchecked includes all support values."
+            if 'PremiumIO' in df.columns else "Premium IO support is not present in the saved dataset."
+        ),
     )
 
-    # vCPUsConstraintsAllowed filter
-    selected_vcpu_constraints = st.sidebar.selectbox(
+    constraints_available = {"vCPUsConstraintsAllowed", "vCPUs"}.issubset(df.columns)
+    if not constraints_available:
+        st.session_state["sku_vcpu_constraints_allowed"] = False
+    selected_vcpu_constraints = st.sidebar.checkbox(
         "vCPUs Constraints Allowed",
-        options=["All", "Yes", "No"],
-        key="vcpu_constraints_support",
+        key="sku_vcpu_constraints_allowed",
+        disabled=not constraints_available,
         help=(
-            "Yes: an allowed positive vCPU count is lower than the SKU's reported "
-            "vCPU count. No: reported allowed counts do not permit a reduction. "
-            "Missing or unusable data is included only with All."
+            "Show only SKUs whose reported allowed positive vCPU counts include "
+            "a value below the SKU's reported vCPU count. Unchecked includes all "
+            "SKUs, including missing or unusable constraint data."
+            if constraints_available else "vCPU constraint fields are not present in the saved dataset."
         ),
     )
 
@@ -73,6 +125,19 @@ try:
         options=vcpu_per_core,
         default=None,
         help="Filter by vCPUs per core"
+    )
+
+    if 'GPUs' not in df.columns:
+        st.session_state["sku_has_gpus"] = False
+    has_gpus = st.sidebar.checkbox(
+        "Has GPUs",
+        key="sku_has_gpus",
+        disabled='GPUs' not in df.columns,
+        help=(
+            "Show only VMs with a reported, finite GPU count greater than zero. "
+            "The GPU-count filter below can narrow the results further."
+            if 'GPUs' in df.columns else "GPU counts are not present in the saved dataset."
+        ),
     )
 
     # GPUs filter - check if GPUs column exists and has values
@@ -92,7 +157,9 @@ try:
         selected_gpus = []
 
     # Apply filters
-    filtered_df = filter_family_versions(df, selected_versions).copy()
+    filtered_df = filter_pricing(
+        filter_family_versions(geography_df, selected_versions).copy(), required_prices,
+    )
 
     if selected_regions:
         filtered_df = filtered_df[filtered_df['Region'].isin(selected_regions)]
@@ -104,9 +171,11 @@ try:
         filtered_df = filtered_df[filtered_df['CpuArchitectureType'].isin(selected_cpu_arch)]
 
     if selected_premium_io:
-        filtered_df = filtered_df[filtered_df['PremiumIO'].isin(selected_premium_io)]
+        filtered_df = filtered_df[
+            filtered_df['PremiumIO'].astype("string").str.strip().str.casefold().eq("true").fillna(False)
+        ]
 
-    if selected_vcpu_constraints != "All":
+    if selected_vcpu_constraints:
         allowed_counts = pd.to_numeric(
             filtered_df['vCPUsConstraintsAllowed'].astype("string").str.split(",").explode(),
             errors="coerce",
@@ -118,11 +187,16 @@ try:
         known_constraints = minimum_allowed.notna() & filtered_df['vCPUs'].gt(0)
         supports_constraints = minimum_allowed.lt(filtered_df['vCPUs'])
         filtered_df = filtered_df[
-            known_constraints & (supports_constraints == (selected_vcpu_constraints == "Yes"))
+            known_constraints & supports_constraints
         ]
 
     if selected_vcpu_per_core:
         filtered_df = filtered_df[filtered_df['vCPUsPerCore'].isin(selected_vcpu_per_core)]
+
+    if has_gpus:
+        filtered_df = filtered_df[
+            filtered_df['GPUs'].gt(0) & np.isfinite(filtered_df['GPUs'])
+        ]
 
     if selected_gpus:
         filtered_df = filtered_df[filtered_df['GPUs'].astype(str).isin(selected_gpus)]
@@ -150,7 +224,7 @@ try:
     # Detailed statistics per column
     st.subheader("📈 Detailed Statistics")
 
-    stats_col1, stats_col2, stats_col3 = st.columns(3)
+    stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
 
     with stats_col1:
         st.markdown("**vCPUs**")
@@ -158,30 +232,32 @@ try:
             vcpu_stats = filtered_df['vCPUs'].describe()
             st.write(f"Min: {vcpu_stats['min']:.0f}")
             st.write(f"Max: {vcpu_stats['max']:.0f}")
-            st.write(f"Mean: {vcpu_stats['mean']:.2f}")
-            st.write(f"Median: {vcpu_stats['50%']:.0f}")
         else:
             st.write("No data")
 
     with stats_col2:
+        st.markdown("**GPUs**")
+        if 'GPUs' in filtered_df.columns and filtered_df['GPUs'].notna().any():
+            st.write(f"Min: {filtered_df['GPUs'].min():.0f}")
+            st.write(f"Max: {filtered_df['GPUs'].max():.0f}")
+        else:
+            st.write("No data")
+
+    with stats_col3:
         st.markdown("**Memory (GB)**")
         if 'MemoryGB' in filtered_df.columns and filtered_df['MemoryGB'].notna().any():
             mem_stats = filtered_df['MemoryGB'].describe()
             st.write(f"Min: {mem_stats['min']:.0f}")
             st.write(f"Max: {mem_stats['max']:.0f}")
-            st.write(f"Mean: {mem_stats['mean']:.2f}")
-            st.write(f"Median: {mem_stats['50%']:.0f}")
         else:
             st.write("No data")
 
-    with stats_col3:
+    with stats_col4:
         st.markdown("**Max Data Disks**")
         if 'MaxDataDiskCount' in filtered_df.columns and filtered_df['MaxDataDiskCount'].notna().any():
             disk_stats = filtered_df['MaxDataDiskCount'].describe()
             st.write(f"Min: {disk_stats['min']:.0f}")
             st.write(f"Max: {disk_stats['max']:.0f}")
-            st.write(f"Mean: {disk_stats['mean']:.2f}")
-            st.write(f"Median: {disk_stats['50%']:.0f}")
         else:
             st.write("No data")
 
@@ -195,14 +271,20 @@ try:
         top_regions = filtered_df['Region'].value_counts().head(10)
         if not top_regions.empty:
             st.markdown("**Top 10 Regions by SKU Count**")
-            st.bar_chart(top_regions)
+            st.bar_chart(
+                top_regions, sort=False,
+                alt="Top regions ordered from highest to lowest SKU count.",
+            )
 
     with chart_col2:
         # Top 10 families by SKU count
         top_families = filtered_df['Family'].value_counts().head(10)
         if not top_families.empty:
             st.markdown("**Top 10 Families by SKU Count**")
-            st.bar_chart(top_families)
+            st.bar_chart(
+                top_families, sort=False,
+                alt="Top families ordered from highest to lowest SKU count.",
+            )
 
     # Display filtered data table
     st.header("📋 Filtered Results")
@@ -211,7 +293,8 @@ try:
     # Column selection for display
     all_columns = list(filtered_df.columns)
     default_columns = ['Region', 'SkuName', 'Family', 'Tier', 'vCPUs', 'MemoryGB',
-                      'GPUs', 'CpuArchitectureType', 'PremiumIO', 'AvailabilityZones']
+                      'GPUs', 'CpuArchitectureType', 'PremiumIO', 'AvailabilityZones',
+                      'retail price', '1Y RI', '3Y RI']
     default_columns = [col for col in default_columns if col in all_columns]
 
     selected_columns = st.multiselect(

@@ -7,7 +7,7 @@ This project provides tools to fetch and explore Azure Virtual Machine SKUs acro
 - Fetch all Azure VM SKUs across all regions
 - Export data to both CSV and Parquet formats
 - Interactive Streamlit dashboard with filtering capabilities
-- Four report pages: SKU browser, Family summary, Region Summary, and Matrix View
+- Five report pages: SKU browser, Family summary, Region Summary, Region Map, and Matrix View
 - Shared family-version selections across reports
 - Distinct SKU aggregation, region coverage, and a vCPU/memory heatmap
 - Detailed statistics and visualizations
@@ -201,29 +201,76 @@ uv run --locked streamlit run streamlit_app.py
 ```
 
 The dashboard provides:
+- Shared **Azure VM SKU Explorer** sidebar header at the very top, above the
+  report navigation links
 - Multi-select filters for region, family, CPU architecture, etc.
 - Real-time statistics (total SKUs, unique regions, unique VM types)
 - Distribution charts for top regions and VM families
-- Detailed statistics for vCPUs, memory, and disk counts
+- Min/Max-only statistics for vCPUs, GPUs, memory, and data disk counts, using
+  filtered rows. GPUs appear next to vCPUs and include reported zeroes; missing GPU
+  data is not assumed to be zero.
 - Downloadable filtered results
 
-The **SKU browser** sidebar includes **Other**, **v2** through **v7** family
-version checkboxes, all selected by default. These combine with the existing
+Both distribution charts show the top ten regions/families in descending SKU
+count order, rather than alphabetical order, and recalculate after filtering.
+
+The **SKU browser** main view includes a horizontal row of **Other**, **v2** through
+**v7** family-version checkboxes, all selected by default. These combine with the existing
 filters and update the results, statistics, charts, and CSV download. Clearing
 all version checkboxes shows no SKUs.
 Family version selections are shared across **SKU browser**, **Family summary**,
-**Region Summary**, and **Matrix View** within the same browser session. Changing
+**Region Summary**, **Region Map**, and **Matrix View** within the same browser session. Changing
 them on one page updates the checkboxes and results when navigating to another.
 Other filters remain page-specific.
-The **vCPUs Constraints Allowed** filter offers **All** (default), **Yes**, and
-**No**. **Yes** means the API reports at least one positive allowed vCPU count
-below the SKU's reported `vCPUs`; **No** means the reported counts do not permit
-a reduction. Missing or unusable constraint/vCPU data is included only with
-**All**. This tests support for reducing vCPUs, not whether a SKU already has
-fewer active vCPUs. Tier remains in the results but has no sidebar filter.
+
+In the SKU browser sidebar, **Geography Group** appears above **Region** and uses
+the official cached location metadata. Select multiple groups; an empty selection
+means all groups. **Not assigned** includes regions missing official geography-group
+metadata. Region choices are restricted to the selected groups, and stale region
+selections outside those groups are cleared. If the location cache is missing or
+invalid, a visible message explains the issue and the geography filter is disabled;
+the remaining browser features still work.
+
+The sidebar also provides **With pricing**, **With 1Y RI**, and **With 3Y RI**
+checkboxes. They start unchecked and require numeric values in `retail price`,
+`1Y RI`, and `3Y RI`, respectively. Zero counts as a price; missing, blank, or
+nonnumeric values do not. Checked price types combine with **AND**, together with
+the other filters, updating the table, statistics, charts, and CSV download.
+A checkbox is disabled when its price column is absent; fetch prices using launcher
+option 2 to add the pricing columns. Geography group is also available in the
+browser's column selector when location metadata is loaded.
+Available `retail price`, `1Y RI`, and `3Y RI` columns are shown by default in
+**Filtered Results** and included in its CSV export. They can be hidden with the
+existing column selector; absent pricing columns are not added.
+
+**Family summary** and **Region Summary** have the same three pricing checkboxes
+in their sidebars. They start unchecked, are disabled for missing columns, and
+combine with **AND**. Filtering happens on SKU rows before aggregation, so
+distinct counts, region coverage, capability ranges, zone unions, minimum-region
+thresholds, and CSV exports reflect only matching SKUs. Groups without matching
+SKUs disappear. These pricing selections are page-specific; family-version
+selections remain shared across reports.
+
+**Has GPUs**, directly above the exact **GPUs** count filter, includes VMs with
+any reported finite GPU count greater than zero. It starts unchecked; zero,
+unknown, and invalid counts do not qualify when checked. It combines with the
+exact GPU-count selection and the other filters, updating the table, statistics,
+charts, and CSV. The checkbox is disabled if the GPU column is absent.
+
+**Premium IO** is an unchecked-by-default checkbox. When checked, only SKUs with
+reported true Premium IO support are included; unchecked includes all values,
+including unknowns. Boolean and case-insensitive string true values are supported.
+
+**vCPUs Constraints Allowed** is also an unchecked-by-default checkbox. When
+checked, the API must report at least one positive allowed vCPU count below the
+SKU's reported `vCPUs`. Unchecked includes all SKUs, including missing or unusable
+constraint/vCPU data. This tests support for reducing vCPUs, not whether a SKU
+already has fewer active vCPUs. Both capability checkboxes combine with the other
+filters and are disabled if their required columns are absent. Tier remains in
+the results but has no sidebar filter.
 
 Use the sidebar navigation to switch between **SKU browser**, **Family summary**,
-**Region Summary**, and **Matrix View**.
+**Region Summary**, **Region Map**, and **Matrix View**.
 The family summary uses the saved dataset and shared family version selections,
 independently of the SKU browser's other filters, with one row per named family.
 It includes distinct SKU and region counts, all reported CPU architectures,
@@ -271,6 +318,34 @@ the selected family-version filters. Reservation-only matches do not count.
 The column is included in the summary CSV and is omitted when `retail price`
 is absent.
 
+**Region Map** places paired 3D bars on an interactive map using the cached official
+Azure coordinates in `data/azure_locations.json`. Create that file first with
+`uv run --locked python fetch_azure_locations.py`. Blue bars show distinct VM SKU
+counts; orange bars show distinct SKUs with numeric retail prices, including zero,
+using the same definition as Region Summary. Reservation-only matches do not
+count. Both bars use the same linear height scale, offset slightly west/east of
+each location to separate them. Hover to see exact counts, and zoom/rotate to
+explore nearby or co-located regions.
+
+The shared family-version checkboxes and a **Geography groups** multiselect
+filter the map and its CSV export. The selector uses official `geographyGroup`
+values, not inferred continents. All available groups start selected; users can
+select or deselect multiple entries, and clearing the selection shows no regions.
+**Not reported** includes regions without geography-group metadata. Geography
+groups are also shown in the table, map tooltips, and CSV export.
+Clearing all family versions shows no regions. Only regions in the saved SKU data
+are plotted, matched case-insensitively to the official ARM region name. Regions
+without metadata or usable coordinates, and logical/non-geographic locations,
+are listed separately with their counts and reasons; coordinates are never
+guessed. If retail pricing columns are absent, the page explicitly shows only
+total SKU bars rather than pretending pricing coverage is zero.
+
+Expand **Region counts and map coordinates** for an accessible table and download
+all filtered regions, counts, coordinates, and mapping status as CSV. The metadata
+snapshot timestamp is displayed; refreshed metadata is picked up within 60 seconds.
+The map uses CARTO basemap tiles and needs network access to display the basemap;
+the counts and coordinate table remain available independently of map tiles.
+
 **Matrix View** counts distinct VM SKU names at the intersections of vCPU ranges
 (rows) and memory ranges in GB (columns). Repeated listings across regions count
 only once per cell. vCPU ranges are **1-2**, **3-4**, **5-8**, and successive
@@ -284,11 +359,17 @@ counts and CSV exports are unchanged by the color effect.
 Missing, non-positive, or non-finite CPU/memory values are not counted.
 
 Alongside shared family versions, Matrix View has independent multiselect filters
-for **Region**, **CPU Architecture Type**, and **# GPUs**; empty selections mean
-all values. **Not reported** in the GPU filter means unknown, not zero GPUs.
+for **Geography Group**, **Region**, **CPU Architecture Type**, and **# GPUs**;
+empty selections mean all values. Geography Group appears immediately left of
+Region and uses the same official metadata and **Not assigned** category as the
+SKU browser. Region options follow the selected geography groups, and stale
+region selections outside those groups are cleared. Missing or invalid location
+metadata disables only the geography filter with a visible explanation.
+Geography selections combine with the other filters and update the matrix,
+heatmap, and CSV. **Not reported** in the GPU filter means unknown, not zero GPUs.
 The CSV download contains the filtered matrix with its row and column labels.
 
-Page navigation requires Streamlit 1.36 or newer.
+The dashboard requires Streamlit 1.65 or newer, including accessible map labels.
 
 ## Report Screenshots
 
@@ -623,9 +704,12 @@ Interactive web dashboard for exploring Azure VM SKU data.
 │   ├── sku_browser.py
 │   ├── family_summary.py
 │   ├── region_summary.py
+│   ├── region_map.py
 │   └── matrix_view.py
 ├── vm_sku_data.py                 # Shared data loading and report aggregations
+├── region_map_data.py             # Official-coordinate joins and paired map bars
 ├── family_filters.py              # Shared family-version controls and state
+├── pricing_filters.py             # Shared pricing-availability controls and row filters
 ├── docs/
 │   └── screenshots/               # Screenshots embedded in this README
 ├── tests/                        # Automated tests
@@ -636,6 +720,8 @@ Interactive web dashboard for exploring Azure VM SKU data.
 │   ├── test_fetch_vm_sku_prices.py # Pricing matching, paging, and export tests
 │   ├── test_vm_sku_data.py        # SKU browser and family report tests
 │   ├── test_region_summary.py     # Region report tests
+│   ├── test_pricing_filters.py    # Pricing filter semantics and summary page integration
+│   ├── test_region_map.py         # Coordinate joins, paired bars, and map page tests
 │   ├── test_matrix_view.py        # Matrix, heatmap, and shared-filter tests
 │   └── manual/
 │       └── test_access.py         # Opt-in live Azure access check

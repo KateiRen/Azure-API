@@ -118,17 +118,17 @@ class RegionPageTests(unittest.TestCase):
             patch("streamlit.download_button", wraps=st.download_button) as download,
         ):
             app = AppTest.from_file(str(self.app_path)).run()
-            app.sidebar.multiselect[0].select("west").run()
+            app.sidebar.multiselect(key="sku_region").select("west").run()
             self.assertEqual(len(app.exception), 0)
             app.switch_page("app_pages/region_summary.py").run()
             self.assertEqual(len(app.exception), 0)
             self.assertEqual(app.title[0].value, "Region Summary")
             self.assertEqual(len(app.sidebar.multiselect), 0)
             self.assertEqual(
-                [checkbox.label for checkbox in app.checkbox],
+                [checkbox.label for checkbox in app.main.checkbox],
                 ["Other", "v2", "v3", "v4", "v5", "v6", "v7"],
             )
-            self.assertTrue(all(checkbox.value for checkbox in app.checkbox))
+            self.assertTrue(all(checkbox.value for checkbox in app.main.checkbox))
             expected = summarize_regions(data)
             pd.testing.assert_frame_equal(app.dataframe[0].value, expected)
             self.assertEqual(list(app.dataframe[0].proto.column_order), [
@@ -160,7 +160,7 @@ class RegionPageTests(unittest.TestCase):
         ):
             app = AppTest.from_file(str(self.app_path)).run()
             app.switch_page("app_pages/region_summary.py").run()
-            for checkbox in app.checkbox:
+            for checkbox in app.main.checkbox:
                 checkbox.set_value(checkbox.label == "v6")
             app.run()
             self.assertEqual(len(app.exception), 0)
@@ -181,7 +181,7 @@ class RegionPageTests(unittest.TestCase):
             pd.testing.assert_frame_equal(app.dataframe[0].value, summarize_regions(data))
             app.switch_page("app_pages/family_summary.py").run()
             self.assertEqual(
-                [checkbox.label for checkbox in app.checkbox if checkbox.value],
+                [checkbox.label for checkbox in app.main.checkbox if checkbox.value],
                 ["v2", "v6"],
             )
 
@@ -189,13 +189,13 @@ class RegionPageTests(unittest.TestCase):
         with patch("vm_sku_data.pd.read_parquet", return_value=region_data()):
             app = AppTest.from_file(str(self.app_path)).run()
             app.switch_page("app_pages/region_summary.py").run()
-            for checkbox in app.checkbox:
+            for checkbox in app.main.checkbox:
                 checkbox.uncheck()
             app.run()
             self.assertEqual(len(app.exception), 0)
             self.assertTrue(app.dataframe[0].value.empty)
             self.assertEqual(len(app.dataframe[0].value.columns), 16)
-            self.assertEqual(app.info[0].value, "No regions match the selected family versions.")
+            self.assertEqual(app.info[0].value, "No regions match the selected filters.")
             app.checkbox(key="region_family_version_v7").check().run()
             self.assertEqual(len(app.exception), 0)
             self.assertTrue(app.dataframe[0].value.empty)
@@ -217,7 +217,7 @@ class RegionPageTests(unittest.TestCase):
             self.assertEqual(len(app.exception), 0)
             self.assertEqual(app.dataframe[0].value[column].tolist(), [2, 1])
             self.assertEqual(list(app.dataframe[0].proto.column_order)[2], column)
-            for checkbox in app.checkbox:
+            for checkbox in app.main.checkbox:
                 checkbox.set_value(checkbox.label == "v6")
             app.run()
             self.assertEqual(len(app.exception), 0)
@@ -225,7 +225,7 @@ class RegionPageTests(unittest.TestCase):
             self.assertEqual(app.dataframe[0].value[column].tolist(), [1])
             csv = pd.read_csv(io.BytesIO(download.call_args.kwargs["data"]))
             self.assertEqual(csv[column].tolist(), [1])
-            for checkbox in app.checkbox:
+            for checkbox in app.main.checkbox:
                 checkbox.uncheck()
             app.run()
             self.assertEqual(len(app.exception), 0)

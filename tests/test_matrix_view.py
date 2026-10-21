@@ -7,6 +7,7 @@ import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from vm_sku_data import load_data, summarize_matrix
+from tests.test_vm_sku_data import browser_locations
 
 
 def matrix_data() -> pd.DataFrame:
@@ -88,6 +89,86 @@ class MatrixPageTests(unittest.TestCase):
         load_data.clear()
         self.addCleanup(load_data.clear)
         self.app_path = Path(__file__).resolve().parents[1] / "streamlit_app.py"
+        metadata = patch("region_map_data.load_region_locations", return_value=browser_locations())
+        metadata.start()
+        self.addCleanup(metadata.stop)
+
+    def test_geography_filter_is_left_of_region_and_updates_region_options_matrix_and_csv(self):
+        data = pd.concat([
+            matrix_data(),
+            matrix_data().iloc[:1].assign(Region="unknown", SkuName="Unassigned"),
+        ], ignore_index=True)
+        with (
+            patch("vm_sku_data.pd.read_parquet", return_value=data),
+            patch("streamlit.download_button", wraps=st.download_button) as download,
+        ):
+            app = AppTest.from_file(str(self.app_path)).run()
+            app.switch_page("app_pages/matrix_view.py").run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(
+                [widget.label for widget in app.multiselect],
+                ["Geography Group", "Region", "CPU Architecture Type", "# GPUs"],
+            )
+            self.assertEqual(
+                app.multiselect(key="matrix_geography_groups").options,
+                ["Europe", "Not assigned", "US"],
+            )
+            self.assertEqual(app.multiselect(key="matrix_geography_groups").value, [])
+            app.multiselect(key="matrix_region").select("west").run()
+            app.multiselect(key="matrix_geography_groups").select("Europe").run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertEqual(app.multiselect(key="matrix_region").options, ["east"])
+            self.assertEqual(app.multiselect(key="matrix_region").value, [])
+            expected = summarize_matrix(data[data["Region"] == "east"])
+            pd.testing.assert_frame_equal(app.dataframe[0].value, expected)
+            self.assertEqual(download.call_args.kwargs["data"], expected.to_csv().encode("utf-8"))
+            app.multiselect(key="matrix_geography_groups").select("Not assigned").run()
+            self.assertEqual(len(app.exception), 0)
+            expected = summarize_matrix(data[data["Region"].isin(["east", "unknown"])])
+            pd.testing.assert_frame_equal(app.dataframe[0].value, expected)
+            self.assertEqual(download.call_args.kwargs["data"], expected.to_csv().encode("utf-8"))
+            app.multiselect(key="matrix_geography_groups").set_value(["Not assigned"]).run()
+            self.assertEqual(app.dataframe[0].value.to_numpy().sum(), 1)
+            app.multiselect(key="matrix_geography_groups").set_value([]).run()
+            pd.testing.assert_frame_equal(app.dataframe[0].value, summarize_matrix(data))
+
+    def test_geography_combines_with_family_architecture_gpu_and_region_filters(self):
+        data = matrix_data()
+        with patch("vm_sku_data.pd.read_parquet", return_value=data):
+            app = AppTest.from_file(str(self.app_path)).run()
+            app.switch_page("app_pages/matrix_view.py").run()
+            for checkbox in app.main.checkbox:
+                checkbox.set_value(checkbox.label == "v5")
+            app.multiselect(key="matrix_geography_groups").select("Europe")
+            app.multiselect(key="matrix_region").select("east")
+            app.multiselect(key="matrix_cpu_arch").select("Arm64")
+            app.multiselect(key="matrix_gpu").select("1").run()
+            self.assertEqual(len(app.exception), 0)
+            pd.testing.assert_frame_equal(
+                app.dataframe[0].value, summarize_matrix(data[data["SkuName"] == "B"]),
+            )
+            self.assertIn(
+                "background-color: rgb(59, 130, 246)",
+                app.dataframe[0].proto.arrow_data.styler.styles,
+            )
+
+    def test_missing_or_invalid_geography_cache_does_not_block_matrix(self):
+        for error in (FileNotFoundError(), ValueError("invalid metadata")):
+            with (
+                self.subTest(error=error),
+                patch("vm_sku_data.pd.read_parquet", return_value=matrix_data()),
+                patch("region_map_data.load_region_locations", side_effect=error),
+            ):
+                load_data.clear()
+                app = AppTest.from_file(str(self.app_path)).run()
+                app.switch_page("app_pages/matrix_view.py").run()
+                self.assertEqual(len(app.exception), int(isinstance(error, ValueError)))
+                self.assertTrue(app.multiselect(key="matrix_geography_groups").disabled)
+                pd.testing.assert_frame_equal(app.dataframe[0].value, summarize_matrix(matrix_data()))
+                if isinstance(error, FileNotFoundError):
+                    self.assertIn("fetch_azure_locations.py", app.warning[0].value)
+                else:
+                    self.assertIn("Geography Group filtering is disabled", app.error[0].value)
 
     def test_filters_combine_and_csv_contains_the_matrix(self):
         data = matrix_data()
@@ -158,7 +239,7 @@ class MatrixPageTests(unittest.TestCase):
     def test_family_versions_are_shared_across_all_pages_and_survive_return_navigation(self):
         with patch("vm_sku_data.pd.read_parquet", return_value=matrix_data()):
             app = AppTest.from_file(str(self.app_path)).run()
-            for checkbox in app.sidebar.checkbox:
+            for checkbox in app.main.checkbox:
                 checkbox.set_value(checkbox.label == "v5")
             app.run()
             app.switch_page("app_pages/matrix_view.py").run()
@@ -166,14 +247,14 @@ class MatrixPageTests(unittest.TestCase):
             self.assertEqual(app.dataframe[0].value.to_numpy().sum(), 3)
             app.checkbox(key="matrix_family_version_v6").check().run()
             app.switch_page("app_pages/family_summary.py").run()
-            self.assertEqual([c.label for c in app.checkbox if c.value], ["v5", "v6"])
+            self.assertEqual([c.label for c in app.main.checkbox if c.value], ["v5", "v6"])
             app.checkbox(key="family_version_v5").uncheck().run()
             app.switch_page("app_pages/region_summary.py").run()
-            self.assertEqual([c.label for c in app.checkbox if c.value], ["v6"])
+            self.assertEqual([c.label for c in app.main.checkbox if c.value], ["v6"])
             self.assertEqual(app.dataframe[0].value["VM SKU Count"].tolist(), [1])
             app.checkbox(key="region_family_version_other").check().run()
             app.switch_page("app_pages/sku_browser.py").run()
-            self.assertEqual([c.label for c in app.sidebar.checkbox if c.value], ["Other", "v6"])
+            self.assertEqual([c.label for c in app.main.checkbox if c.value], ["Other", "v6"])
             self.assertEqual(app.dataframe[0].value["SkuName"].tolist(), ["C", "E"])
             app.switch_page("app_pages/matrix_view.py").run()
             self.assertEqual(len(app.exception), 0)
